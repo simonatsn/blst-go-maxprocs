@@ -17,6 +17,7 @@ import "C"
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 )
 
@@ -41,6 +42,27 @@ type P2Affine = C.blst_p2_affine
 type Message = []byte
 type Pairing = []uint64
 type SecretKey = Scalar
+
+//
+// Configuration
+//
+
+var maxProcs = initMaxCores()
+
+func initMaxCores() int {
+	maxProcs := runtime.GOMAXPROCS(0) - 1
+	if maxProcs <= 0 {
+		maxProcs = 1
+	}
+	return maxProcs
+}
+
+func SetMaxProcs(max int) {
+	if max <= 0 {
+		max = 1
+	}
+	maxProcs = max
+}
 
 //
 // Secret key
@@ -330,7 +352,8 @@ func coreAggregateVerifyPkInG1(sigFn sigGetterP2, pkFn pkGetterP1,
 		useHash = optional[0]
 	}
 
-	numThreads := runtime.GOMAXPROCS(0)
+	numCores := runtime.GOMAXPROCS(0)
+	numThreads := maxProcs
 	if numThreads > n {
 		numThreads = n
 	}
@@ -341,6 +364,9 @@ func coreAggregateVerifyPkInG1(sigFn sigGetterP2, pkFn pkGetterP1,
 	msgsCh := make(chan Pairing, numThreads)
 	valid := int32(1)
 	curItem := uint32(0)
+	mutex := sync.Mutex{}
+
+	mutex.Lock()
 	for tid := 0; tid < numThreads; tid++ {
 		go func() {
 			pairing := PairingCtx()
@@ -350,6 +376,11 @@ func coreAggregateVerifyPkInG1(sigFn sigGetterP2, pkFn pkGetterP1,
 				work := atomic.AddUint32(&curItem, 1) - 1
 				if work >= uint32(n) {
 					break
+
+				} else if work == 0 && numThreads == numCores-1 {
+					// let main thread ahead
+					mutex.Lock()
+					mutex.Unlock()
 				}
 
 				// pull Public Key and augmentation blob
@@ -375,6 +406,7 @@ func coreAggregateVerifyPkInG1(sigFn sigGetterP2, pkFn pkGetterP1,
 			}
 		}()
 	}
+	mutex.Unlock()
 
 	// Uncompress and check signature
 	var gtsig Fp12
@@ -504,7 +536,7 @@ func (agg *P2Aggregate) aggregate(getter aggGetterP2, n int) bool {
 	if n == 0 {
 		return true
 	}
-	numThreads := runtime.GOMAXPROCS(0)
+	numThreads := maxProcs
 	if numThreads > n {
 		numThreads = n
 	}
@@ -764,7 +796,8 @@ func coreAggregateVerifyPkInG2(sigFn sigGetterP1, pkFn pkGetterP2,
 		useHash = optional[0]
 	}
 
-	numThreads := runtime.GOMAXPROCS(0)
+	numCores := runtime.GOMAXPROCS(0)
+	numThreads := maxProcs
 	if numThreads > n {
 		numThreads = n
 	}
@@ -775,6 +808,9 @@ func coreAggregateVerifyPkInG2(sigFn sigGetterP1, pkFn pkGetterP2,
 	msgsCh := make(chan Pairing, numThreads)
 	valid := int32(1)
 	curItem := uint32(0)
+	mutex := sync.Mutex{}
+
+	mutex.Lock()
 	for tid := 0; tid < numThreads; tid++ {
 		go func() {
 			pairing := PairingCtx()
@@ -784,6 +820,11 @@ func coreAggregateVerifyPkInG2(sigFn sigGetterP1, pkFn pkGetterP2,
 				work := atomic.AddUint32(&curItem, 1) - 1
 				if work >= uint32(n) {
 					break
+
+				} else if work == 0 && numThreads == numCores-1 {
+					// let main thread ahead
+					mutex.Lock()
+					mutex.Unlock()
 				}
 
 				// pull Public Key and augmentation blob
@@ -809,6 +850,7 @@ func coreAggregateVerifyPkInG2(sigFn sigGetterP1, pkFn pkGetterP2,
 			}
 		}()
 	}
+	mutex.Unlock()
 
 	// Uncompress and check signature
 	var gtsig Fp12
@@ -938,7 +980,7 @@ func (agg *P1Aggregate) aggregate(getter aggGetterP1, n int) bool {
 	if n == 0 {
 		return true
 	}
-	numThreads := runtime.GOMAXPROCS(0)
+	numThreads := maxProcs
 	if numThreads > n {
 		numThreads = n
 	}
