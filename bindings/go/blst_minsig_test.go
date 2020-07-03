@@ -107,7 +107,8 @@ func TestSignVerifyMinSig(t *testing.T) {
 		t.Errorf("verify sig2")
 	}
 	// Batch verify
-	if !sig0.AggregateVerify([]*PublicKeyMinSig{pk0}, []Message{msg0}, dstMinSig) {
+	if !sig0.AggregateVerify([]*PublicKeyMinSig{pk0}, []Message{msg0},
+		dstMinSig) {
 		t.Errorf("aggregate verify sig0")
 	}
 	// Verify compressed inputs
@@ -124,7 +125,8 @@ func TestSignVerifyMinSig(t *testing.T) {
 
 	// Compressed with empty pk
 	var emptyPk []byte
-	if new(SignatureMinSig).VerifyCompressed(sig0.Compress(), emptyPk, msg0, dstMinSig) {
+	if new(SignatureMinSig).VerifyCompressed(sig0.Compress(), emptyPk, msg0,
+		dstMinSig) {
 		t.Errorf("verify sig compressed inputs")
 	}
 	// Wrong message
@@ -178,7 +180,12 @@ func TestSignVerifyEncodeMinSig(t *testing.T) {
 
 func TestSignVerifyAggregateMinSig(t *testing.T) {
 	for size := 1; size < 20; size++ {
-		sks, msgs, _, pubks, _ := generateBatchTestDataUncompressedMinSig(size)
+		sks, msgs, _, pubks, _, err :=
+			generateBatchTestDataUncompressedMinSig(size)
+		if err {
+			t.Errorf("Error generating test data")
+			return
+		}
 
 		// All signers sign the same message
 		sigs := make([]*SignatureMinSig, 0)
@@ -186,7 +193,12 @@ func TestSignVerifyAggregateMinSig(t *testing.T) {
 			sigs = append(sigs, new(SignatureMinSig).Sign(sks[i], msgs[0],
 				dstMinSig))
 		}
-		agSig := new(AggregateSignatureMinSig).Aggregate(sigs).ToAffine()
+		agProj := new(AggregateSignatureMinSig).Aggregate(sigs)
+		if agProj == nil {
+			t.Errorf("Aggregate unexpectedly returned nil")
+			return
+		}
+		agSig := agProj.ToAffine()
 
 		if !agSig.FastAggregateVerify(pubks, msgs[0], dstMinSig) {
 			t.Errorf("failed to verify size %d", size)
@@ -201,8 +213,12 @@ func TestSignVerifyAggregateMinSig(t *testing.T) {
 				compSigs[i] = sigs[i].Serialize()
 			}
 		}
-		agSig = new(AggregateSignatureMinSig).AggregateCompressed(compSigs).
-			ToAffine()
+		agProj = new(AggregateSignatureMinSig).AggregateCompressed(compSigs)
+		if agProj == nil {
+			t.Errorf("AggregateCompressed unexpectedly returned nil")
+			return
+		}
+		agSig = agProj.ToAffine()
 		if !agSig.FastAggregateVerify(pubks, msgs[0], dstMinSig) {
 			t.Errorf("failed to verify size %d", size)
 		}
@@ -247,7 +263,10 @@ func BenchmarkCoreVerifyMinSig(b *testing.B) {
 func BenchmarkCoreVerifyAggregateMinSig(b *testing.B) {
 	run := func(size int) func(b *testing.B) {
 		return func(b *testing.B) {
-			msgs, _, pubks, agsig := generateBatchTestDataMinSig(size)
+			msgs, _, pubks, agsig, err := generateBatchTestDataMinSig(size)
+			if err {
+				b.Fatal("Error generating test data")
+			}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				if !new(SignatureMinSig).AggregateVerifyCompressed(agsig, pubks,
@@ -270,8 +289,11 @@ func BenchmarkCoreVerifyAggregateMinSig(b *testing.B) {
 func BenchmarkVerifyAggregateUncompressedMinSig(b *testing.B) {
 	run := func(size int) func(b *testing.B) {
 		return func(b *testing.B) {
-			_, msgs, _, pubks, agsig :=
+			_, msgs, _, pubks, agsig, err :=
 				generateBatchTestDataUncompressedMinSig(size)
+			if err {
+				b.Fatal("Error generating test data")
+			}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				if !agsig.AggregateVerify(pubks, msgs, dstMinSig) {
@@ -293,7 +315,10 @@ func BenchmarkVerifyAggregateUncompressedMinSig(b *testing.B) {
 func BenchmarkCoreAggregateMinSig(b *testing.B) {
 	run := func(size int) func(b *testing.B) {
 		return func(b *testing.B) {
-			_, sigs, _, _ := generateBatchTestDataMinSig(size)
+			_, sigs, _, _, err := generateBatchTestDataMinSig(size)
+			if err {
+				b.Fatal("Error generating test data")
+			}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				var agg AggregateSignatureMinSig
@@ -323,7 +348,8 @@ func genRandomKeyMinSig() *SecretKey {
 }
 
 func generateBatchTestDataMinSig(size int) (msgs []Message,
-	sigs [][]byte, pubks [][]byte, agsig []byte) {
+	sigs [][]byte, pubks [][]byte, agsig []byte, err bool) {
+	err = false
 	for i := 0; i < size; i++ {
 		msg := Message(fmt.Sprintf("blst is a blast!! %d", i))
 		msgs = append(msgs, msg)
@@ -332,14 +358,26 @@ func generateBatchTestDataMinSig(size int) (msgs []Message,
 			Compress())
 		pubks = append(pubks, new(PublicKeyMinSig).From(priv).Compress())
 	}
-	agsig = new(AggregateSignatureMinSig).AggregateCompressed(sigs).ToAffine().
-		Compress()
+	agProj := new(AggregateSignatureMinSig).AggregateCompressed(sigs)
+	if agProj == nil {
+		fmt.Println("AggregateCompressed unexpectedly returned nil")
+		err = true
+		return
+	}
+	agAff := agProj.ToAffine()
+	if agAff == nil {
+		fmt.Println("ToAffine unexpectedly returned nil")
+		err = true
+		return
+	}
+	agsig = agAff.Compress()
 	return
 }
 
 func generateBatchTestDataUncompressedMinSig(size int) (sks []*SecretKey,
 	msgs []Message, sigs []*SignatureMinSig, pubks []*PublicKeyMinSig,
-	agsig *SignatureMinSig) {
+	agsig *SignatureMinSig, err bool) {
+	err = false
 	for i := 0; i < size; i++ {
 		msg := Message(fmt.Sprintf("blst is a blast!! %d", i))
 		msgs = append(msgs, msg)
@@ -348,6 +386,12 @@ func generateBatchTestDataUncompressedMinSig(size int) (sks []*SecretKey,
 		sigs = append(sigs, new(SignatureMinSig).Sign(priv, msg, dstMinSig))
 		pubks = append(pubks, new(PublicKeyMinSig).From(priv))
 	}
-	agsig = new(AggregateSignatureMinSig).Aggregate(sigs).ToAffine()
+	agProj := new(AggregateSignatureMinSig).Aggregate(sigs)
+	if agProj == nil {
+		fmt.Println("Aggregate unexpectedly returned nil")
+		err = true
+		return
+	}
+	agsig = agProj.ToAffine()
 	return
 }
